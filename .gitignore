@@ -1,0 +1,8 @@
+.env
+.venv/
+__pycache__/
+*.pyc
+bill_database.csv
+justice_reform_bills.csv
+justice_reform_report.txt
+
