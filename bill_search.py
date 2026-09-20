@@ -26,6 +26,8 @@ API_KEY = os.getenv("OPENSTATES_API_KEY")
 CHECKPOINT_FILE = BASE_DIR / ".monitor_checkpoint.json"
 OVERLAP_HOURS = 72
 MAX_RETRIES = 5
+REQUEST_INTERVAL_SECONDS = 7
+RATE_LIMIT_RETRY_SECONDS = 65
 
 # ============================================================
 # KEYWORDS
@@ -317,6 +319,7 @@ def main():
 
     headers = {"X-API-KEY": api_key.strip()}
     page = 1
+    last_request_at = 0.0
 
     while True:
         print(f"Getting page {page}...")
@@ -326,7 +329,12 @@ def main():
 
         for attempt in range(1, MAX_RETRIES + 1):
             try:
+                elapsed = time.monotonic() - last_request_at
+                if elapsed < REQUEST_INTERVAL_SECONDS:
+                    time.sleep(REQUEST_INTERVAL_SECONDS - elapsed)
+
                 response = requests.get(url, params=params, headers=headers, timeout=30)
+                last_request_at = time.monotonic()
                 if response.status_code == 200:
                     success = True
                     break
@@ -337,7 +345,7 @@ def main():
                     if retry_after and retry_after.isdigit():
                         wait = min(120, int(retry_after))
                     else:
-                        wait = min(60, 2 ** attempt) + random.random()
+                        wait = RATE_LIMIT_RETRY_SECONDS + random.random()
                     print(f"  Attempt {attempt}/{MAX_RETRIES}: {last_error}")
                     if attempt < MAX_RETRIES:
                         print(f"  Waiting {wait:.1f}s before retrying...")
@@ -361,7 +369,6 @@ def main():
         if len(bills) < 20:
             break
         page += 1
-        time.sleep(2)
 
     print(f"Total bills retrieved: {len(all_bills)}")
 
