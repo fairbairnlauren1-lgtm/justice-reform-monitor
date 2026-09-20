@@ -1,8 +1,11 @@
+import argparse
 import csv
+import json
 import os
+import random
 import time
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import requests
 from dotenv import load_dotenv
@@ -18,10 +21,9 @@ load_dotenv(BASE_DIR / ".env")
 
 API_KEY = os.getenv("OPENSTATES_API_KEY")
 
-if not API_KEY:
-    print("ERROR: Open States API key was not found.")
-    exit()
-
+CHECKPOINT_FILE = BASE_DIR / ".monitor_checkpoint.json"
+OVERLAP_HOURS = 72
+MAX_RETRIES = 5
 
 # ============================================================
 # KEYWORDS
@@ -232,594 +234,379 @@ KEYWORDS = {
 
 # ============================================================
 # FIND MATCHES
-# ============================================================
 
 def find_matches(bill):
-
     title = bill.get("title", "") or ""
     abstract = bill.get("abstract", "") or ""
-
     text = f"{title} {abstract}".lower()
-
     matches = {}
-
     for category, keywords in KEYWORDS.items():
-
-        found = []
-
-        for keyword in keywords:
-
-            if keyword.lower() in text:
-                found.append(keyword)
-
+        found = [keyword for keyword in keywords if keyword.lower() in text]
         if found:
             matches[category] = found
-
     return matches
 
 
-# ============================================================
-# LOAD OLD DATABASE
-# ============================================================
+def main():
+    parser = argparse.ArgumentParser(description="California justice reform legislative monitor")
+    parser.add_argument("--full", action="store_true", help="Perform a full reconciliation")
+    args = parser.parse_args()
 
-database_file = BASE_DIR / "bill_database.csv"
+    api_key = os.getenv("OPENSTATES_API_KEY")
+    if not api_key:
+        raise SystemExit("ERROR: Open States API key was not found.")
 
-old_bills = {}
+    # ============================================================
+    # LOAD OLD DATABASE
+    # ============================================================
 
-if database_file.exists():
+    database_file = BASE_DIR / "bill_database.csv"
+    old_bills = {}
 
-    with open(
-        database_file,
-        "r",
-        newline="",
-        encoding="utf-8"
-    ) as file:
+    if database_file.exists():
+        with open(database_file, "r", newline="", encoding="utf-8") as file:
+            for row in csv.DictReader(file):
+                identifier = row.get("identifier", "")
+                if identifier:
+                    old_bills[identifier] = row
 
-        reader = csv.DictReader(file)
+    print(f"Previously tracked bills: {len(old_bills)}")
 
-        for row in reader:
+    # ============================================================
+    # GET BILLS
+    # ============================================================
 
-            identifier = row.get("identifier", "")
+    url = "https://v3.openstates.org/bills"
+    all_bills = []
+    print("Searching California legislation...")
 
-            if identifier:
-                old_bills[identifier] = row
-
-
-print()
-print(
-    f"Previously tracked bills: "
-    f"{len(old_bills)}"
-)
-print()
-
-# ============================================================
-# GET BILLS
-# ============================================================
-
-url = "https://v3.openstates.org/bills"
-
-all_bills = []
-
-print("Searching California legislation...")
-print()
-
-
-# ------------------------------------------------------------
-# DETERMINE SEARCH WINDOW
-# ------------------------------------------------------------
-
-if old_bills:
-
-    # We already have a database.
-    # Only look for bills updated recently.
-
-    yesterday = (
-        datetime.utcnow() - timedelta(days=1)
-    ).strftime("%Y-%m-%dT%H:%M:%S")
-
-    print(
-        f"Looking for bills updated since {yesterday}..."
-    )
-
-    search_params = {
-        "jurisdiction": "California",
-        "per_page": 20,
-        "updated_since": yesterday,
-    }
-
-else:
-
-    # First run.
-    # We need an initial set of bills.
-
-    print(
-        "No previous database found."
-    )
-
-    print(
-        "Performing initial California bill search..."
-    )
-
-    search_params = {
-        "jurisdiction": "California",
-        "per_page": 20,
-    }
-
-
-# ------------------------------------------------------------
-# API REQUEST
-# ------------------------------------------------------------
-
-headers = {
-    "X-API-KEY": API_KEY.strip(),
-}
-
-page = 1
-
-
-while True:
-
-    print(
-        f"Getting page {page}..."
-    )
-
-    params = {
-        **search_params,
-        "page": page,
-    }
-
-    success = False
-
-    for attempt in range(1, 4):
-
+    checkpoint = None
+    if CHECKPOINT_FILE.exists():
         try:
+            checkpoint = json.loads(CHECKPOINT_FILE.read_text(encoding="utf-8")).get("last_successful_search")
+        except (OSError, json.JSONDecodeError):
+            checkpoint = None
 
-            response = requests.get(
-                url,
-                params=params,
-                headers=headers,
-                timeout=30
-            )
+    if args.full or not old_bills or not checkpoint:
+        print("Performing full California bill reconciliation...")
+        search_params = {"jurisdiction": "California", "per_page": 20}
+    else:
+        try:
+            since = datetime.fromisoformat(checkpoint).astimezone(timezone.utc) - timedelta(hours=OVERLAP_HOURS)
+        except ValueError:
+            raise SystemExit("ERROR: checkpoint timestamp is invalid; run with --full to rebuild safely.")
+        since_text = since.strftime("%Y-%m-%dT%H:%M:%S")
+        print(f"Looking for bills updated since {since_text} UTC (with {OVERLAP_HOURS}-hour overlap)...")
+        search_params = {"jurisdiction": "California", "per_page": 20, "updated_since": since_text}
 
-            if response.status_code == 200:
+    headers = {"X-API-KEY": api_key.strip()}
+    page = 1
 
-                success = True
-                break
+    while True:
+        print(f"Getting page {page}...")
+        params = {**search_params, "page": page}
+        success = False
+        last_error = None
 
-            print(
-                f"  Attempt {attempt}: "
-                f"server returned "
-                f"{response.status_code}"
-            )
+        for attempt in range(1, MAX_RETRIES + 1):
+            try:
+                response = requests.get(url, params=params, headers=headers, timeout=30)
+                if response.status_code == 200:
+                    success = True
+                    break
 
-            if response.status_code == 429:
+                last_error = f"HTTP {response.status_code}: {response.text[:500]}"
+                retry_after = response.headers.get("Retry-After")
+                if response.status_code == 429 or response.status_code >= 500:
+                    if retry_after and retry_after.isdigit():
+                        wait = min(120, int(retry_after))
+                    else:
+                        wait = min(60, 2 ** attempt) + random.random()
+                    print(f"  Attempt {attempt}/{MAX_RETRIES}: {last_error}")
+                    if attempt < MAX_RETRIES:
+                        print(f"  Waiting {wait:.1f}s before retrying...")
+                        time.sleep(wait)
+                else:
+                    raise RuntimeError(last_error)
+            except requests.RequestException as error:
+                last_error = str(error)
+                print(f"  Attempt {attempt}/{MAX_RETRIES}: {error}")
+                if attempt < MAX_RETRIES:
+                    time.sleep(min(60, 2 ** attempt) + random.random())
 
-                print(
-                    "  Rate limit reached. "
-                    "Waiting 10 seconds..."
-                )
+        if not success:
+            raise RuntimeError(f"Could not retrieve page {page} after {MAX_RETRIES} attempts: {last_error}")
 
-                time.sleep(10)
+        data = response.json()
+        bills = data.get("results", [])
+        print(f"  Found {len(bills)} bills.")
+        all_bills.extend(bills)
 
-            else:
+        if len(bills) < 20:
+            break
+        page += 1
+        time.sleep(2)
 
-                print(
-                    f"  API response: "
-                    f"{response.text}"
-                )
+    print(f"Total bills retrieved: {len(all_bills)}")
 
-        except requests.RequestException as error:
+    # ============================================================
+    # PROCESS CURRENT BILLS
+    # ============================================================
 
-            print(
-                f"  Attempt {attempt}: "
-                f"{error}"
-            )
+    today = datetime.now().strftime("%Y-%m-%d")
 
-            time.sleep(5)
+    current_bills = []
+
+    new_bills = []
+
+    changed_bills = []
 
 
-    if not success:
+    for bill in all_bills:
 
-        print(
-            f"Could not retrieve page {page}."
+        matches = find_matches(bill)
+
+        if not matches:
+            continue
+
+        print()
+        print("MATCH FOUND")
+        print("Identifier:", bill.get("identifier", ""))
+        print("Title:", bill.get("title", ""))
+        print("Abstract:", bill.get("abstract", ""))
+        print("Categories:", matches)
+
+
+        identifier = bill.get("identifier", "")
+
+        categories = "; ".join(matches.keys())
+
+        keywords = []
+
+        for category in matches:
+            keywords.extend(matches[category])
+
+        latest_action = (
+            bill.get("latest_action_description", "")
+            or ""
         )
 
-        print(
-            "Stopping search."
+        latest_action_date = (
+            bill.get("latest_action_date", "")
+            or ""
         )
 
-        break
-
-
-    data = response.json()
-
-    bills = data.get(
-        "results",
-        []
-    )
-
-    print(
-        f"  Found {len(bills)} bills."
-    )
-
-    all_bills.extend(bills)
-
-
-    # --------------------------------------------------------
-    # STOP WHEN THERE ARE NO MORE RESULTS
-    # --------------------------------------------------------
-
-    if len(bills) < 20:
-
-        break
-
-
-    page += 1
-
-    # Stay below the API rate limit.
-
-    time.sleep(7)
-
-
-print()
-
-print(
-    f"Total bills retrieved: "
-    f"{len(all_bills)}"
-)
-
-print()
-
-
-# ============================================================
-# PROCESS CURRENT BILLS
-# ============================================================
-
-today = datetime.now().strftime("%Y-%m-%d")
-
-current_bills = []
-
-new_bills = []
-
-changed_bills = []
-
-
-for bill in all_bills:
-
-    matches = find_matches(bill)
-
-    if not matches:
-        continue
-
-    print()
-    print("MATCH FOUND")
-    print("Identifier:", bill.get("identifier", ""))
-    print("Title:", bill.get("title", ""))
-    print("Abstract:", bill.get("abstract", ""))
-    print("Categories:", matches)
-
-
-    identifier = bill.get("identifier", "")
-
-    categories = "; ".join(matches.keys())
-
-    keywords = []
-
-    for category in matches:
-        keywords.extend(matches[category])
-
-    latest_action = (
-        bill.get("latest_action_description", "")
-        or ""
-    )
-
-    latest_action_date = (
-        bill.get("latest_action_date", "")
-        or ""
-    )
-
-    new_record = {
-
-        "identifier": identifier,
-
-        "title": bill.get("title", "") or "",
-
-        "abstract": bill.get("abstract", "") or "",
-
-        "latest_action": latest_action,
-
-        "latest_action_date": latest_action_date,
-
-        "openstates_url":
-            bill.get("openstates_url", "") or "",
-
-        "matched_categories": categories,
-
-        "matched_keywords":
-            "; ".join(keywords),
-
-        "last_checked": today,
-    }
-
-    current_bills.append(new_record)
-
-
-    # --------------------------------------------------------
-    # IS THIS A NEW BILL?
-    # --------------------------------------------------------
-
-    if identifier not in old_bills:
-
-        new_bills.append(new_record)
-
-        continue
-
-
-    # --------------------------------------------------------
-    # DID THE BILL CHANGE?
-    # --------------------------------------------------------
-
-    old_record = old_bills[identifier]
-
-    old_action = (
-        old_record.get("latest_action", "")
-        or ""
-    )
-
-    old_action_date = (
-        old_record.get("latest_action_date", "")
-        or ""
-    )
-
-    if (
-        latest_action != old_action
-        or
-        latest_action_date != old_action_date
-    ):
-
-        changed_bills.append({
+        new_record = {
 
             "identifier": identifier,
 
             "title": bill.get("title", "") or "",
 
-            "old_action": old_action,
+            "abstract": bill.get("abstract", "") or "",
 
-            "new_action": latest_action,
+            "latest_action": latest_action,
 
-            "old_date": old_action_date,
-
-            "new_date": latest_action_date,
+            "latest_action_date": latest_action_date,
 
             "openstates_url":
                 bill.get("openstates_url", "") or "",
-        })
+
+            "matched_categories": categories,
+
+            "matched_keywords":
+                "; ".join(keywords),
+
+            "last_checked": today,
+        }
+
+        current_bills.append(new_record)
 
 
-# ============================================================
-# SAVE UPDATED DATABASE
-# ============================================================
+        # --------------------------------------------------------
+        # IS THIS A NEW BILL?
+        # --------------------------------------------------------
 
-fieldnames = [
-    "identifier",
-    "title",
-    "abstract",
-    "latest_action",
-    "latest_action_date",
-    "openstates_url",
-    "matched_categories",
-    "matched_keywords",
-    "last_checked",
-]
+        if identifier not in old_bills:
+
+            new_bills.append(new_record)
+
+            continue
 
 
-with open(
-    database_file,
-    "w",
-    newline="",
-    encoding="utf-8"
-) as file:
+        # --------------------------------------------------------
+        # DID THE BILL CHANGE?
+        # --------------------------------------------------------
 
-    writer = csv.DictWriter(
-        file,
-        fieldnames=fieldnames
-    )
+        old_record = old_bills[identifier]
 
-    writer.writeheader()
-
-    writer.writerows(current_bills)
-
-
-# ============================================================
-# SAVE CURRENT RESULTS
-# ============================================================
-
-results_file = BASE_DIR / "justice_reform_bills.csv"
-
-
-with open(
-    results_file,
-    "w",
-    newline="",
-    encoding="utf-8"
-) as file:
-
-    writer = csv.DictWriter(
-        file,
-        fieldnames=fieldnames
-    )
-
-    writer.writeheader()
-
-    writer.writerows(current_bills)
-
-
-# ============================================================
-# CREATE CHANGE REPORT
-# ============================================================
-
-report_file = BASE_DIR / "justice_reform_report.txt"
-
-
-with open(
-    report_file,
-    "w",
-    encoding="utf-8"
-) as file:
-
-    file.write(
-        "CALIFORNIA JUSTICE REFORM MONITOR\n"
-    )
-
-    file.write(
-        f"Search date: {today}\n\n"
-    )
-
-
-    # --------------------------------------------------------
-    # NEW BILLS
-    # --------------------------------------------------------
-
-    file.write(
-        "NEW BILLS\n"
-    )
-
-    file.write(
-        "=========\n\n"
-    )
-
-    if not new_bills:
-
-        file.write(
-            "No new bills found.\n\n"
+        old_action = (
+            old_record.get("latest_action", "")
+            or ""
         )
 
-    else:
-
-        for bill in new_bills:
-
-            file.write(
-                f"{bill['identifier']} - "
-                f"{bill['title']}\n"
-            )
-
-            file.write(
-                f"Category: "
-                f"{bill['matched_categories']}\n"
-            )
-
-            file.write(
-                f"Keywords: "
-                f"{bill['matched_keywords']}\n"
-            )
-
-            file.write(
-                f"Latest action: "
-                f"{bill['latest_action']}\n"
-            )
-
-            file.write(
-                f"Date: "
-                f"{bill['latest_action_date']}\n"
-            )
-
-            file.write(
-                f"URL: "
-                f"{bill['openstates_url']}\n\n"
-            )
-
-
-    # --------------------------------------------------------
-    # CHANGED BILLS
-    # --------------------------------------------------------
-
-    file.write(
-        "CHANGED BILLS\n"
-    )
-
-    file.write(
-        "=============\n\n"
-    )
-
-    if not changed_bills:
-
-        file.write(
-            "No changed bills found.\n\n"
+        old_action_date = (
+            old_record.get("latest_action_date", "")
+            or ""
         )
 
+        if (
+            latest_action != old_action
+            or
+            latest_action_date != old_action_date
+        ):
+
+            changed_bills.append({
+
+                "identifier": identifier,
+
+                "title": bill.get("title", "") or "",
+
+                "old_action": old_action,
+
+                "new_action": latest_action,
+
+                "old_date": old_action_date,
+
+                "new_date": latest_action_date,
+
+                "openstates_url":
+                    bill.get("openstates_url", "") or "",
+            })
+
+
+    # ============================================================
+    # SAVE UPDATED DATABASE SAFELY
+    # ============================================================
+
+    fieldnames = [
+        "identifier", "title", "abstract", "latest_action",
+        "latest_action_date", "openstates_url",
+        "matched_categories", "matched_keywords", "last_checked",
+    ]
+
+    if args.full or not old_bills:
+        database_records = {r["identifier"]: r for r in current_bills if r.get("identifier")}
     else:
+        database_records = dict(old_bills)
+        fetched_ids = {bill.get("identifier", "") for bill in all_bills if bill.get("identifier")}
 
-        for bill in changed_bills:
+        # Incremental searches return every bill updated in the window. Reconcile
+        # those records, including bills that no longer match our keywords.
+        for identifier in fetched_ids:
+            database_records.pop(identifier, None)
 
-            file.write(
-                f"{bill['identifier']} - "
-                f"{bill['title']}\n"
-            )
+        database_records.update(
+            {r["identifier"]: r for r in current_bills if r.get("identifier")}
+        )
 
-            file.write(
-                f"Previous action: "
-                f"{bill['old_action']}\n"
-            )
+    final_records = sorted(database_records.values(), key=lambda r: r.get("identifier", ""))
 
-            file.write(
-                f"New action: "
-                f"{bill['new_action']}\n"
-            )
+    def atomic_write(path, write_func):
+        temp = path.with_name(path.name + ".tmp")
+        try:
+            write_func(temp)
+            os.replace(temp, path)
+        except Exception:
+            try:
+                temp.unlink()
+            except FileNotFoundError:
+                pass
+            raise
 
-            file.write(
-                f"Previous date: "
-                f"{bill['old_date']}\n"
-            )
+    def write_csv(path, rows):
+        def writer_func(temp):
+            with open(temp, "w", newline="", encoding="utf-8") as file:
+                writer = csv.DictWriter(file, fieldnames=fieldnames)
+                writer.writeheader()
+                writer.writerows(rows)
+        atomic_write(path, writer_func)
 
-            file.write(
-                f"New date: "
-                f"{bill['new_date']}\n"
-            )
+    write_csv(database_file, final_records)
+    write_csv(BASE_DIR / "justice_reform_bills.csv", final_records)
 
-            file.write(
-                f"URL: "
-                f"{bill['openstates_url']}\n\n"
-            )
+    report_file = BASE_DIR / "justice_reform_report.txt"
+    def write_report(temp):
+        with open(temp, "w", encoding="utf-8") as file:
+            file.write("CALIFORNIA JUSTICE REFORM MONITOR\n")
+            file.write(f"Search date: {today}\n\n")
+            file.write("SEARCH STATUS\n=============\n\n")
+            file.write("SUCCESS: all requested API pages were retrieved.\n\n")
+            file.write("NEW BILLS\n=========\n\n")
+            if not new_bills:
+                file.write("No new bills found.\n\n")
+            else:
+                for bill in new_bills:
+                    file.write(f"{bill['identifier']} - {bill['title']}\n")
+                    file.write(f"Category: {bill['matched_categories']}\n")
+                    file.write(f"Keywords: {bill['matched_keywords']}\n")
+                    file.write(f"Latest action: {bill['latest_action']}\n")
+                    file.write(f"Date: {bill['latest_action_date']}\n")
+                    file.write(f"URL: {bill['openstates_url']}\n\n")
+            file.write("CHANGED BILLS\n=============\n\n")
+            if not changed_bills:
+                file.write("No changed bills found.\n\n")
+            else:
+                for bill in changed_bills:
+                    file.write(f"{bill['identifier']} - {bill['title']}\n")
+                    file.write(f"Previous action: {bill['old_action']}\n")
+                    file.write(f"New action: {bill['new_action']}\n")
+                    file.write(f"Previous date: {bill['old_date']}\n")
+                    file.write(f"New date: {bill['new_date']}\n")
+                    file.write(f"URL: {bill['openstates_url']}\n\n")
+            file.write(f"Relevant bills currently tracked: {len(final_records)}\n")
+
+    atomic_write(report_file, write_report)
+
+    checkpoint_payload = {
+        "last_successful_search": datetime.now(timezone.utc).isoformat(),
+        "mode": "full" if args.full or not old_bills else "incremental",
+        "bills_retrieved": len(all_bills),
+    }
+    atomic_write(CHECKPOINT_FILE, lambda temp: temp.write_text(json.dumps(checkpoint_payload, indent=2) + "\n", encoding="utf-8"))
+
+    # ============================================================
+    # SHOW RESULTS
+    # ============================================================
+
+    print()
+    print("======================================")
+    print("LEGISLATIVE MONITORING COMPLETE")
+    print("======================================")
+
+    print()
+    print(
+        f"Relevant bills currently tracked: "
+        f"{len(current_bills)}"
+    )
+
+    print(
+        f"New bills: "
+        f"{len(new_bills)}"
+    )
+
+    print(
+        f"Changed bills: "
+        f"{len(changed_bills)}"
+    )
+
+    print()
+    print(
+        "Database:"
+    )
+
+    print(database_file)
+
+    print()
+    print(
+        "Report:"
+    )
+
+    print(report_file)
+
+    print()
 
 
-# ============================================================
-# SHOW RESULTS
-# ============================================================
 
-print()
-print("======================================")
-print("LEGISLATIVE MONITORING COMPLETE")
-print("======================================")
 
-print()
-print(
-    f"Relevant bills currently tracked: "
-    f"{len(current_bills)}"
-)
-
-print(
-    f"New bills: "
-    f"{len(new_bills)}"
-)
-
-print(
-    f"Changed bills: "
-    f"{len(changed_bills)}"
-)
-
-print()
-print(
-    "Database:"
-)
-
-print(database_file)
-
-print()
-print(
-    "Report:"
-)
-
-print(report_file)
-
-print()
-
+if __name__ == "__main__":
+    main()
