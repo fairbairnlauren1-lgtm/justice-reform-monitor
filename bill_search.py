@@ -1,5 +1,6 @@
 import csv
 import os
+import time
 from pathlib import Path
 from datetime import datetime
 
@@ -307,6 +308,9 @@ print()
 while True:
 
     print(f"Getting page {page}...")
+
+    if page > 1:
+        time.sleep(7)
 
     params = {
         "jurisdiction": "California",
