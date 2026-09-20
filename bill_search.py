@@ -308,23 +308,29 @@ while True:
 
     print(f"Getting page {page}...")
 
-    params = {
-        "jurisdiction": "California",
-        "per_page": per_page,
-        "page": page,
-        "apikey": API_KEY.strip(),
-    }
+ params = {
+    "jurisdiction": "California",
+    "per_page": per_page,
+    "page": page,
+}
+
+headers = {
+    "X-API-KEY": API_KEY.strip(),
+}
+
 
     success = False
 
     for attempt in range(1, 4):
 
         try:
-            response = requests.get(
+           response = requests.get(
                 url,
                 params=params,
+                headers=headers,
                 timeout=30
-            )
+)
+
 
             if response.status_code == 200:
                 success = True
