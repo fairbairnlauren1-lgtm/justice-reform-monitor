@@ -299,7 +299,7 @@ url = "https://v3.openstates.org/bills"
 
 all_bills = []
 page = 1
-per_page = 100
+per_page = 20
 
 print("Searching California legislation...")
 print()
