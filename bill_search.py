@@ -291,28 +291,26 @@ print(
 )
 print()
 
-
 # ============================================================
-# GET CURRENT BILLS
+# GET ALL CURRENT BILLS
 # ============================================================
 
 url = "https://v3.openstates.org/bills"
 
-MAX_PAGES = 10
-
 all_bills = []
+page = 1
+per_page = 100
 
 print("Searching California legislation...")
 print()
 
+while True:
 
-for page in range(1, MAX_PAGES + 1):
-
-    print(f"Getting page {page} of {MAX_PAGES}...")
+    print(f"Getting page {page}...")
 
     params = {
         "jurisdiction": "California",
-        "per_page": 20,
+        "per_page": per_page,
         "page": page,
         "apikey": API_KEY.strip(),
     }
@@ -322,7 +320,6 @@ for page in range(1, MAX_PAGES + 1):
     for attempt in range(1, 4):
 
         try:
-
             response = requests.get(
                 url,
                 params=params,
@@ -330,7 +327,6 @@ for page in range(1, MAX_PAGES + 1):
             )
 
             if response.status_code == 200:
-
                 success = True
                 break
 
@@ -342,18 +338,15 @@ for page in range(1, MAX_PAGES + 1):
         except requests.RequestException as error:
 
             print(
-                f"  Attempt {attempt}: "
-                f"{error}"
+                f"  Attempt {attempt}: {error}"
             )
 
     if not success:
-
         print(
             f"Could not retrieve page {page}. "
-            "Skipping."
+            "Stopping search."
         )
-
-        continue
+        break
 
     data = response.json()
 
@@ -363,8 +356,22 @@ for page in range(1, MAX_PAGES + 1):
 
     all_bills.extend(bills)
 
-    if len(bills) == 0:
+    # --------------------------------------------------------
+    # STOP WHEN THERE ARE NO MORE RESULTS
+    # --------------------------------------------------------
+
+    if len(bills) < per_page:
         break
+
+    page += 1
+
+
+print()
+print(
+    f"Total bills retrieved: {len(all_bills)}"
+)
+print()
+
 
 
 # ============================================================
