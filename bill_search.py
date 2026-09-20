@@ -488,7 +488,16 @@ def main():
         database_records = {r["identifier"]: r for r in current_bills if r.get("identifier")}
     else:
         database_records = dict(old_bills)
-        database_records.update({r["identifier"]: r for r in current_bills if r.get("identifier")})
+        fetched_ids = {bill.get("identifier", "") for bill in all_bills if bill.get("identifier")}
+
+        # Incremental searches return every bill updated in the window. Reconcile
+        # those records, including bills that no longer match our keywords.
+        for identifier in fetched_ids:
+            database_records.pop(identifier, None)
+
+        database_records.update(
+            {r["identifier"]: r for r in current_bills if r.get("identifier")}
+        )
 
     final_records = sorted(database_records.values(), key=lambda r: r.get("identifier", ""))
 
