@@ -4,40 +4,7 @@ Search date: 2026-09-20
 NEW BILLS
 =========
 
-AB 2796 - Criminal history information: background checks.
-Category: Criminal records
-Keywords: criminal history; background check
-Latest action: Chaptered by Secretary of State - Chapter 313, Statutes of 2026.
-Date: 2026-09-18
-URL: https://openstates.org/ca/bills/20252026/AB2796/
-
-AB 2195 - Child support: license suspensions.
-Category: Fines and collateral consequences
-Keywords: license suspension
-Latest action: Chaptered by Secretary of State - Chapter 291, Statutes of 2026.
-Date: 2026-09-18
-URL: https://openstates.org/ca/bills/20252026/AB2195/
-
-AB 2204 - Prisons: organized sports programming.
-Category: Prisons and incarceration
-Keywords: prison
-Latest action: Enrolled and presented to the Governor at 3 p.m.
-Date: 2026-09-15
-URL: https://openstates.org/ca/bills/20252026/AB2204/
-
-AB 2727 - Corrections: parole and prerelease treatment.
-Category: Prisons and incarceration; Reentry and supervision
-Keywords: corrections; parole
-Latest action: Enrolled and presented to the Governor at 3 p.m.
-Date: 2026-09-15
-URL: https://openstates.org/ca/bills/20252026/AB2727/
-
-AB 2004 - Peace officers: deputy sheriffs.
-Category: Police and law enforcement
-Keywords: peace officer
-Latest action: Chaptered by Secretary of State - Chapter 206, Statutes of 2026.
-Date: 2026-09-15
-URL: https://openstates.org/ca/bills/20252026/AB2004/
+No new bills found.
 
 CHANGED BILLS
 =============
