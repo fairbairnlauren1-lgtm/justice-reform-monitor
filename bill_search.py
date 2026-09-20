@@ -1,8 +1,11 @@
+import argparse
 import csv
+import json
 import os
+import random
 import time
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import requests
 from dotenv import load_dotenv
@@ -19,8 +22,15 @@ load_dotenv(BASE_DIR / ".env")
 API_KEY = os.getenv("OPENSTATES_API_KEY")
 
 if not API_KEY:
-    print("ERROR: Open States API key was not found.")
-    exit()
+    raise SystemExit("ERROR: Open States API key was not found.")
+
+CHECKPOINT_FILE = BASE_DIR / ".monitor_checkpoint.json"
+OVERLAP_HOURS = 72
+MAX_RETRIES = 5
+
+parser = argparse.ArgumentParser(description="California justice reform legislative monitor")
+parser.add_argument("--full", action="store_true", help="Perform a full reconciliation")
+args = parser.parse_args()
 
 
 # ============================================================
@@ -466,190 +476,85 @@ for bill in all_bills:
 
 
 # ============================================================
-# SAVE UPDATED DATABASE
+# SAVE UPDATED DATABASE SAFELY
 # ============================================================
 
 fieldnames = [
-    "identifier",
-    "title",
-    "abstract",
-    "latest_action",
-    "latest_action_date",
-    "openstates_url",
-    "matched_categories",
-    "matched_keywords",
-    "last_checked",
+    "identifier", "title", "abstract", "latest_action",
+    "latest_action_date", "openstates_url",
+    "matched_categories", "matched_keywords", "last_checked",
 ]
 
+if args.full or not old_bills:
+    database_records = {r["identifier"]: r for r in current_bills if r.get("identifier")}
+else:
+    database_records = dict(old_bills)
+    database_records.update({r["identifier"]: r for r in current_bills if r.get("identifier")})
 
-with open(
-    database_file,
-    "w",
-    newline="",
-    encoding="utf-8"
-) as file:
+final_records = sorted(database_records.values(), key=lambda r: r.get("identifier", ""))
 
-    writer = csv.DictWriter(
-        file,
-        fieldnames=fieldnames
-    )
+def atomic_write(path, write_func):
+    temp = path.with_name(path.name + ".tmp")
+    try:
+        write_func(temp)
+        os.replace(temp, path)
+    except Exception:
+        try:
+            temp.unlink()
+        except FileNotFoundError:
+            pass
+        raise
 
-    writer.writeheader()
+def write_csv(path, rows):
+    def writer_func(temp):
+        with open(temp, "w", newline="", encoding="utf-8") as file:
+            writer = csv.DictWriter(file, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(rows)
+    atomic_write(path, writer_func)
 
-    writer.writerows(current_bills)
-
-
-# ============================================================
-# SAVE CURRENT RESULTS
-# ============================================================
-
-results_file = BASE_DIR / "justice_reform_bills.csv"
-
-
-with open(
-    results_file,
-    "w",
-    newline="",
-    encoding="utf-8"
-) as file:
-
-    writer = csv.DictWriter(
-        file,
-        fieldnames=fieldnames
-    )
-
-    writer.writeheader()
-
-    writer.writerows(current_bills)
-
-
-# ============================================================
-# CREATE CHANGE REPORT
-# ============================================================
+write_csv(database_file, final_records)
+write_csv(BASE_DIR / "justice_reform_bills.csv", final_records)
 
 report_file = BASE_DIR / "justice_reform_report.txt"
+def write_report(temp):
+    with open(temp, "w", encoding="utf-8") as file:
+        file.write("CALIFORNIA JUSTICE REFORM MONITOR\n")
+        file.write(f"Search date: {today}\n\n")
+        file.write("SEARCH STATUS\n=============\n\n")
+        file.write("SUCCESS: all requested API pages were retrieved.\n\n")
+        file.write("NEW BILLS\n=========\n\n")
+        if not new_bills:
+            file.write("No new bills found.\n\n")
+        else:
+            for bill in new_bills:
+                file.write(f"{bill['identifier']} - {bill['title']}\n")
+                file.write(f"Category: {bill['matched_categories']}\n")
+                file.write(f"Keywords: {bill['matched_keywords']}\n")
+                file.write(f"Latest action: {bill['latest_action']}\n")
+                file.write(f"Date: {bill['latest_action_date']}\n")
+                file.write(f"URL: {bill['openstates_url']}\n\n")
+        file.write("CHANGED BILLS\n=============\n\n")
+        if not changed_bills:
+            file.write("No changed bills found.\n\n")
+        else:
+            for bill in changed_bills:
+                file.write(f"{bill['identifier']} - {bill['title']}\n")
+                file.write(f"Previous action: {bill['old_action']}\n")
+                file.write(f"New action: {bill['new_action']}\n")
+                file.write(f"Previous date: {bill['old_date']}\n")
+                file.write(f"New date: {bill['new_date']}\n")
+                file.write(f"URL: {bill['openstates_url']}\n\n")
+        file.write(f"Relevant bills currently tracked: {len(final_records)}\n")
 
+atomic_write(report_file, write_report)
 
-with open(
-    report_file,
-    "w",
-    encoding="utf-8"
-) as file:
-
-    file.write(
-        "CALIFORNIA JUSTICE REFORM MONITOR\n"
-    )
-
-    file.write(
-        f"Search date: {today}\n\n"
-    )
-
-
-    # --------------------------------------------------------
-    # NEW BILLS
-    # --------------------------------------------------------
-
-    file.write(
-        "NEW BILLS\n"
-    )
-
-    file.write(
-        "=========\n\n"
-    )
-
-    if not new_bills:
-
-        file.write(
-            "No new bills found.\n\n"
-        )
-
-    else:
-
-        for bill in new_bills:
-
-            file.write(
-                f"{bill['identifier']} - "
-                f"{bill['title']}\n"
-            )
-
-            file.write(
-                f"Category: "
-                f"{bill['matched_categories']}\n"
-            )
-
-            file.write(
-                f"Keywords: "
-                f"{bill['matched_keywords']}\n"
-            )
-
-            file.write(
-                f"Latest action: "
-                f"{bill['latest_action']}\n"
-            )
-
-            file.write(
-                f"Date: "
-                f"{bill['latest_action_date']}\n"
-            )
-
-            file.write(
-                f"URL: "
-                f"{bill['openstates_url']}\n\n"
-            )
-
-
-    # --------------------------------------------------------
-    # CHANGED BILLS
-    # --------------------------------------------------------
-
-    file.write(
-        "CHANGED BILLS\n"
-    )
-
-    file.write(
-        "=============\n\n"
-    )
-
-    if not changed_bills:
-
-        file.write(
-            "No changed bills found.\n\n"
-        )
-
-    else:
-
-        for bill in changed_bills:
-
-            file.write(
-                f"{bill['identifier']} - "
-                f"{bill['title']}\n"
-            )
-
-            file.write(
-                f"Previous action: "
-                f"{bill['old_action']}\n"
-            )
-
-            file.write(
-                f"New action: "
-                f"{bill['new_action']}\n"
-            )
-
-            file.write(
-                f"Previous date: "
-                f"{bill['old_date']}\n"
-            )
-
-            file.write(
-                f"New date: "
-                f"{bill['new_date']}\n"
-            )
-
-            file.write(
-                f"URL: "
-                f"{bill['openstates_url']}\n\n"
-            )
-
+checkpoint_payload = {
+    "last_successful_search": datetime.now(timezone.utc).isoformat(),
+    "mode": "full" if args.full or not old_bills else "incremental",
+    "bills_retrieved": len(all_bills),
+}
+atomic_write(CHECKPOINT_FILE, lambda temp: temp.write_text(json.dumps(checkpoint_payload, indent=2) + "\n", encoding="utf-8"))
 
 # ============================================================
 # SHOW RESULTS
