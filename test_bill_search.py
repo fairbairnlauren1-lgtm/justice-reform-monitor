@@ -69,3 +69,26 @@ def test_incremental_reconciliation_removes_updated_nonmatching_bill():
 
     assert "A" not in database_records
     assert "B" in database_records
+
+
+
+def test_find_matches_does_not_match_keyword_as_substring():
+    bill = {
+        "title": "Bailout funding for transportation",
+        "abstract": "Provides emergency funding for local agencies."
+    }
+
+    assert bill_search.find_matches(bill) == {}
+
+
+def test_find_matches_handles_hyphenation_consistently():
+    bill = {
+        "title": "Three strikes sentencing review",
+        "abstract": "Updates eligibility for resentencing."
+    }
+
+    matches = bill_search.find_matches(bill)
+
+    assert "Sentencing reform" in matches
+    assert "three strikes" in matches["Sentencing reform"]
+    assert "resentencing" in matches["Sentencing reform"]

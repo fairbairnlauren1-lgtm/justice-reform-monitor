@@ -7,6 +7,8 @@ import time
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 
+import re
+
 import requests
 from dotenv import load_dotenv
 
@@ -235,13 +237,27 @@ KEYWORDS = {
 # ============================================================
 # FIND MATCHES
 
+def normalize_text(value):
+    """Normalize bill text so phrases match consistently across punctuation/case."""
+    value = value or ""
+    value = value.lower().replace("-", " ")
+    return re.sub(r"\s+", " ", value).strip()
+
+
+def keyword_is_present(text, keyword):
+    """Match a keyword as a phrase, not as an arbitrary substring."""
+    normalized_keyword = normalize_text(keyword)
+    pattern = rf"(?<!\w){re.escape(normalized_keyword)}(?!\w)"
+    return re.search(pattern, text) is not None
+
+
 def find_matches(bill):
-    title = bill.get("title", "") or ""
-    abstract = bill.get("abstract", "") or ""
-    text = f"{title} {abstract}".lower()
+    title = normalize_text(bill.get("title", ""))
+    abstract = normalize_text(bill.get("abstract", ""))
+    text = f"{title} {abstract}".strip()
     matches = {}
     for category, keywords in KEYWORDS.items():
-        found = [keyword for keyword in keywords if keyword.lower() in text]
+        found = [keyword for keyword in keywords if keyword_is_present(text, keyword)]
         if found:
             matches[category] = found
     return matches
