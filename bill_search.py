@@ -394,6 +394,14 @@ for bill in all_bills:
     if not matches:
         continue
 
+    print()
+    print("MATCH FOUND")
+    print("Identifier:", bill.get("identifier", ""))
+    print("Title:", bill.get("title", ""))
+    print("Abstract:", bill.get("abstract", ""))
+    print("Categories:", matches)
+
+
     identifier = bill.get("identifier", "")
 
     categories = "; ".join(matches.keys())
