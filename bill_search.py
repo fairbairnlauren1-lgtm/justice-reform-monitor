@@ -308,31 +308,31 @@ while True:
 
     print(f"Getting page {page}...")
 
- params = {
-    "jurisdiction": "California",
-    "per_page": per_page,
-    "page": page,
-}
+    params = {
+        "jurisdiction": "California",
+        "per_page": per_page,
+        "page": page,
+    }
 
-headers = {
-    "X-API-KEY": API_KEY.strip(),
-}
-
+    headers = {
+        "X-API-KEY": API_KEY.strip(),
+    }
 
     success = False
 
     for attempt in range(1, 4):
 
         try:
-           response = requests.get(
+
+            response = requests.get(
                 url,
                 params=params,
                 headers=headers,
                 timeout=30
-)
-
+            )
 
             if response.status_code == 200:
+
                 success = True
                 break
 
@@ -341,32 +341,38 @@ headers = {
                 f"server returned {response.status_code}"
             )
 
+            print(
+                f"  API response: {response.text}"
+            )
+
         except requests.RequestException as error:
 
             print(
-                f"  Attempt {attempt}: {error}"
+                f"  Attempt {attempt}: "
+                f"{error}"
             )
 
     if not success:
+
         print(
             f"Could not retrieve page {page}. "
             "Stopping search."
         )
+
         break
 
     data = response.json()
 
     bills = data.get("results", [])
 
-    print(f"  Found {len(bills)} bills.")
+    print(
+        f"  Found {len(bills)} bills."
+    )
 
     all_bills.extend(bills)
 
-    # --------------------------------------------------------
-    # STOP WHEN THERE ARE NO MORE RESULTS
-    # --------------------------------------------------------
-
     if len(bills) < per_page:
+
         break
 
     page += 1
