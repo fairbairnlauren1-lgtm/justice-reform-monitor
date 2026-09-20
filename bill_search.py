@@ -232,29 +232,16 @@ KEYWORDS = {
 
 # ============================================================
 # FIND MATCHES
-# ============================================================
 
 def find_matches(bill):
-
     title = bill.get("title", "") or ""
     abstract = bill.get("abstract", "") or ""
-
     text = f"{title} {abstract}".lower()
-
     matches = {}
-
     for category, keywords in KEYWORDS.items():
-
-        found = []
-
-        for keyword in keywords:
-
-            if keyword.lower() in text:
-                found.append(keyword)
-
+        found = [keyword for keyword in keywords if keyword.lower() in text]
         if found:
             matches[category] = found
-
     return matches
 
 
@@ -263,213 +250,95 @@ def find_matches(bill):
 # ============================================================
 
 database_file = BASE_DIR / "bill_database.csv"
-
 old_bills = {}
 
 if database_file.exists():
-
-    with open(
-        database_file,
-        "r",
-        newline="",
-        encoding="utf-8"
-    ) as file:
-
-        reader = csv.DictReader(file)
-
-        for row in reader:
-
+    with open(database_file, "r", newline="", encoding="utf-8") as file:
+        for row in csv.DictReader(file):
             identifier = row.get("identifier", "")
-
             if identifier:
                 old_bills[identifier] = row
 
-
-print()
-print(
-    f"Previously tracked bills: "
-    f"{len(old_bills)}"
-)
-print()
+print(f"Previously tracked bills: {len(old_bills)}")
 
 # ============================================================
 # GET BILLS
 # ============================================================
 
 url = "https://v3.openstates.org/bills"
-
 all_bills = []
-
 print("Searching California legislation...")
-print()
 
-
-# ------------------------------------------------------------
-# DETERMINE SEARCH WINDOW
-# ------------------------------------------------------------
-
-if old_bills:
-
-    # We already have a database.
-    # Only look for bills updated recently.
-
-    yesterday = (
-        datetime.utcnow() - timedelta(days=1)
-    ).strftime("%Y-%m-%dT%H:%M:%S")
-
-    print(
-        f"Looking for bills updated since {yesterday}..."
-    )
-
-    search_params = {
-        "jurisdiction": "California",
-        "per_page": 20,
-        "updated_since": yesterday,
-    }
-
+if args.full or not old_bills:
+    print("Performing full California bill reconciliation...")
+    search_params = {"jurisdiction": "California", "per_page": 20}
 else:
+    checkpoint = None
+    if CHECKPOINT_FILE.exists():
+        try:
+            checkpoint = json.loads(CHECKPOINT_FILE.read_text(encoding="utf-8")).get("last_successful_search")
+        except (OSError, json.JSONDecodeError):
+            checkpoint = None
+    if checkpoint:
+        try:
+            since = datetime.fromisoformat(checkpoint).astimezone(timezone.utc) - timedelta(hours=OVERLAP_HOURS)
+        except ValueError:
+            since = datetime.now(timezone.utc) - timedelta(days=3)
+    else:
+        since = datetime.now(timezone.utc) - timedelta(days=3)
+    since_text = since.strftime("%Y-%m-%dT%H:%M:%S")
+    print(f"Looking for bills updated since {since_text} UTC (with {OVERLAP_HOURS}-hour overlap)...")
+    search_params = {"jurisdiction": "California", "per_page": 20, "updated_since": since_text}
 
-    # First run.
-    # We need an initial set of bills.
-
-    print(
-        "No previous database found."
-    )
-
-    print(
-        "Performing initial California bill search..."
-    )
-
-    search_params = {
-        "jurisdiction": "California",
-        "per_page": 20,
-    }
-
-
-# ------------------------------------------------------------
-# API REQUEST
-# ------------------------------------------------------------
-
-headers = {
-    "X-API-KEY": API_KEY.strip(),
-}
-
+headers = {"X-API-KEY": API_KEY.strip()}
 page = 1
 
-
 while True:
-
-    print(
-        f"Getting page {page}..."
-    )
-
-    params = {
-        **search_params,
-        "page": page,
-    }
-
+    print(f"Getting page {page}...")
+    params = {**search_params, "page": page}
     success = False
+    last_error = None
 
-    for attempt in range(1, 4):
-
+    for attempt in range(1, MAX_RETRIES + 1):
         try:
-
-            response = requests.get(
-                url,
-                params=params,
-                headers=headers,
-                timeout=30
-            )
-
+            response = requests.get(url, params=params, headers=headers, timeout=30)
             if response.status_code == 200:
-
                 success = True
                 break
 
-            print(
-                f"  Attempt {attempt}: "
-                f"server returned "
-                f"{response.status_code}"
-            )
-
-            if response.status_code == 429:
-
-                print(
-                    "  Rate limit reached. "
-                    "Waiting 10 seconds..."
-                )
-
-                time.sleep(10)
-
+            last_error = f"HTTP {response.status_code}: {response.text[:500]}"
+            retry_after = response.headers.get("Retry-After")
+            if response.status_code == 429 or response.status_code >= 500:
+                if retry_after and retry_after.isdigit():
+                    wait = min(120, int(retry_after))
+                else:
+                    wait = min(60, 2 ** attempt) + random.random()
+                print(f"  Attempt {attempt}/{MAX_RETRIES}: {last_error}")
+                if attempt < MAX_RETRIES:
+                    print(f"  Waiting {wait:.1f}s before retrying...")
+                    time.sleep(wait)
             else:
-
-                print(
-                    f"  API response: "
-                    f"{response.text}"
-                )
-
+                raise RuntimeError(last_error)
         except requests.RequestException as error:
-
-            print(
-                f"  Attempt {attempt}: "
-                f"{error}"
-            )
-
-            time.sleep(5)
-
+            last_error = str(error)
+            print(f"  Attempt {attempt}/{MAX_RETRIES}: {error}")
+            if attempt < MAX_RETRIES:
+                time.sleep(min(60, 2 ** attempt) + random.random())
 
     if not success:
-
-        print(
-            f"Could not retrieve page {page}."
-        )
-
-        print(
-            "Stopping search."
-        )
-
-        break
-
+        raise RuntimeError(f"Could not retrieve page {page} after {MAX_RETRIES} attempts: {last_error}")
 
     data = response.json()
-
-    bills = data.get(
-        "results",
-        []
-    )
-
-    print(
-        f"  Found {len(bills)} bills."
-    )
-
+    bills = data.get("results", [])
+    print(f"  Found {len(bills)} bills.")
     all_bills.extend(bills)
 
-
-    # --------------------------------------------------------
-    # STOP WHEN THERE ARE NO MORE RESULTS
-    # --------------------------------------------------------
-
     if len(bills) < 20:
-
         break
-
-
     page += 1
+    time.sleep(2)
 
-    # Stay below the API rate limit.
-
-    time.sleep(7)
-
-
-print()
-
-print(
-    f"Total bills retrieved: "
-    f"{len(all_bills)}"
-)
-
-print()
-
+print(f"Total bills retrieved: {len(all_bills)}")
 
 # ============================================================
 # PROCESS CURRENT BILLS
