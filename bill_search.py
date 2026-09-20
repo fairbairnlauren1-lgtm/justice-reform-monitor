@@ -2,7 +2,7 @@ import csv
 import os
 import time
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import requests
 from dotenv import load_dotenv
@@ -293,33 +293,79 @@ print(
 print()
 
 # ============================================================
-# GET ALL CURRENT BILLS
+# GET BILLS
 # ============================================================
 
 url = "https://v3.openstates.org/bills"
 
 all_bills = []
-page = 1
-per_page = 20
 
 print("Searching California legislation...")
 print()
 
-while True:
 
-    print(f"Getting page {page}...")
+# ------------------------------------------------------------
+# DETERMINE SEARCH WINDOW
+# ------------------------------------------------------------
 
-    if page > 1:
-        time.sleep(7)
+if old_bills:
 
-    params = {
+    # We already have a database.
+    # Only look for bills updated recently.
+
+    yesterday = (
+        datetime.utcnow() - timedelta(days=1)
+    ).strftime("%Y-%m-%dT%H:%M:%S")
+
+    print(
+        f"Looking for bills updated since {yesterday}..."
+    )
+
+    search_params = {
         "jurisdiction": "California",
-        "per_page": per_page,
-        "page": page,
+        "per_page": 20,
+        "updated_since": yesterday,
     }
 
-    headers = {
-        "X-API-KEY": API_KEY.strip(),
+else:
+
+    # First run.
+    # We need an initial set of bills.
+
+    print(
+        "No previous database found."
+    )
+
+    print(
+        "Performing initial California bill search..."
+    )
+
+    search_params = {
+        "jurisdiction": "California",
+        "per_page": 20,
+    }
+
+
+# ------------------------------------------------------------
+# API REQUEST
+# ------------------------------------------------------------
+
+headers = {
+    "X-API-KEY": API_KEY.strip(),
+}
+
+page = 1
+
+
+while True:
+
+    print(
+        f"Getting page {page}..."
+    )
+
+    params = {
+        **search_params,
+        "page": page,
     }
 
     success = False
@@ -342,12 +388,25 @@ while True:
 
             print(
                 f"  Attempt {attempt}: "
-                f"server returned {response.status_code}"
+                f"server returned "
+                f"{response.status_code}"
             )
 
-            print(
-                f"  API response: {response.text}"
-            )
+            if response.status_code == 429:
+
+                print(
+                    "  Rate limit reached. "
+                    "Waiting 10 seconds..."
+                )
+
+                time.sleep(10)
+
+            else:
+
+                print(
+                    f"  API response: "
+                    f"{response.text}"
+                )
 
         except requests.RequestException as error:
 
@@ -356,18 +415,28 @@ while True:
                 f"{error}"
             )
 
+            time.sleep(5)
+
+
     if not success:
 
         print(
-            f"Could not retrieve page {page}. "
+            f"Could not retrieve page {page}."
+        )
+
+        print(
             "Stopping search."
         )
 
         break
 
+
     data = response.json()
 
-    bills = data.get("results", [])
+    bills = data.get(
+        "results",
+        []
+    )
 
     print(
         f"  Found {len(bills)} bills."
@@ -375,19 +444,31 @@ while True:
 
     all_bills.extend(bills)
 
-    if len(bills) < per_page:
+
+    # --------------------------------------------------------
+    # STOP WHEN THERE ARE NO MORE RESULTS
+    # --------------------------------------------------------
+
+    if len(bills) < 20:
 
         break
 
+
     page += 1
 
+    # Stay below the API rate limit.
+
+    time.sleep(7)
+
 
 print()
+
 print(
-    f"Total bills retrieved: {len(all_bills)}"
+    f"Total bills retrieved: "
+    f"{len(all_bills)}"
 )
-print()
 
+print()
 
 
 # ============================================================
