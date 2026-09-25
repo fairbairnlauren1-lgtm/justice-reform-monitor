@@ -28,6 +28,7 @@ OVERLAP_HOURS = 72
 MAX_RETRIES = 5
 REQUEST_INTERVAL_SECONDS = 7
 RATE_LIMIT_RETRY_SECONDS = 65
+PAGE_SIZE = 100
 
 # ============================================================
 # KEYWORDS
@@ -307,7 +308,7 @@ def main():
 
     if args.full or not old_bills or not checkpoint:
         print("Performing full California bill reconciliation...")
-        search_params = {"jurisdiction": "California", "per_page": 20}
+        search_params = {"jurisdiction": "California", "per_page": PAGE_SIZE}
     else:
         try:
             since = datetime.fromisoformat(checkpoint).astimezone(timezone.utc) - timedelta(hours=OVERLAP_HOURS)
@@ -315,7 +316,7 @@ def main():
             raise SystemExit("ERROR: checkpoint timestamp is invalid; run with --full to rebuild safely.")
         since_text = since.strftime("%Y-%m-%dT%H:%M:%S")
         print(f"Looking for bills updated since {since_text} UTC (with {OVERLAP_HOURS}-hour overlap)...")
-        search_params = {"jurisdiction": "California", "per_page": 20, "updated_since": since_text}
+        search_params = {"jurisdiction": "California", "per_page": PAGE_SIZE, "updated_since": since_text}
 
     headers = {"X-API-KEY": api_key.strip()}
     page = 1
@@ -340,6 +341,11 @@ def main():
                     break
 
                 last_error = f"HTTP {response.status_code}: {response.text[:500]}"
+                if response.status_code == 429 and "exceeded limit of 250/day" in response.text:
+                    raise RuntimeError(
+                        "Open States daily API limit (250 requests/day) has been reached. "
+                        "The monitor will retry on a later run."
+                    )
                 retry_after = response.headers.get("Retry-After")
                 if response.status_code == 429 or response.status_code >= 500:
                     if retry_after and retry_after.isdigit():
@@ -366,7 +372,7 @@ def main():
         print(f"  Found {len(bills)} bills.")
         all_bills.extend(bills)
 
-        if len(bills) < 20:
+        if len(bills) < PAGE_SIZE:
             break
         page += 1
 
