@@ -28,7 +28,7 @@ OVERLAP_HOURS = 72
 MAX_RETRIES = 5
 REQUEST_INTERVAL_SECONDS = 7
 RATE_LIMIT_RETRY_SECONDS = 65
-PAGE_SIZE = 100
+PAGE_SIZE = 20
 
 # ============================================================
 # KEYWORDS
