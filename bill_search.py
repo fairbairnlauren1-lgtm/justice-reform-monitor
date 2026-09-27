@@ -29,6 +29,7 @@ MAX_RETRIES = 5
 REQUEST_INTERVAL_SECONDS = 7
 RATE_LIMIT_RETRY_SECONDS = 65
 PAGE_SIZE = 20
+MAX_FULL_PAGES_PER_RUN = 30
 
 # ============================================================
 # KEYWORDS
@@ -299,16 +300,33 @@ def main():
     all_bills = []
     print("Searching California legislation...")
 
-    checkpoint = None
+    checkpoint_data = {}
     if CHECKPOINT_FILE.exists():
         try:
-            checkpoint = json.loads(CHECKPOINT_FILE.read_text(encoding="utf-8")).get("last_successful_search")
+            checkpoint_data = json.loads(CHECKPOINT_FILE.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
-            checkpoint = None
+            checkpoint_data = {}
 
-    if args.full or not old_bills or not checkpoint:
+    checkpoint = checkpoint_data.get("last_successful_search")
+    resuming_full = (
+        not args.full
+        and checkpoint_data.get("mode") == "full_in_progress"
+        and checkpoint_data.get("next_page")
+    )
+
+    if resuming_full:
+        print("Resuming full California reconciliation from the saved page checkpoint...")
+        search_params = checkpoint_data.get("search_params") or {"jurisdiction": "California", "per_page": PAGE_SIZE}
+        page = int(checkpoint_data.get("next_page", 1))
+        all_bills = checkpoint_data.get("bills", [])
+        print(f"Resuming at page {page}; {len(all_bills)} bills already saved in the baseline checkpoint.")
+        full_mode = True
+    elif args.full or not old_bills or not checkpoint:
         print("Performing full California bill reconciliation...")
         search_params = {"jurisdiction": "California", "per_page": PAGE_SIZE}
+        page = 1
+        all_bills = []
+        full_mode = True
     else:
         try:
             since = datetime.fromisoformat(checkpoint).astimezone(timezone.utc) - timedelta(hours=OVERLAP_HOURS)
@@ -317,10 +335,34 @@ def main():
         since_text = since.strftime("%Y-%m-%dT%H:%M:%S")
         print(f"Looking for bills updated since {since_text} UTC (with {OVERLAP_HOURS}-hour overlap)...")
         search_params = {"jurisdiction": "California", "per_page": PAGE_SIZE, "updated_since": since_text}
+        page = 1
+        all_bills = []
+        full_mode = False
 
     headers = {"X-API-KEY": api_key.strip()}
-    page = 1
     last_request_at = 0.0
+    pages_this_run = 0
+
+    def save_full_checkpoint(next_page, bills):
+        payload = {
+            "mode": "full_in_progress",
+            "next_page": next_page,
+            "search_params": search_params,
+            "bills": bills,
+        }
+        temp = CHECKPOINT_FILE.with_name(CHECKPOINT_FILE.name + ".tmp")
+        try:
+            temp.write_text(json.dumps(payload), encoding="utf-8")
+            os.replace(temp, CHECKPOINT_FILE)
+        except Exception:
+            try:
+                temp.unlink()
+            except FileNotFoundError:
+                pass
+            raise
+
+    if full_mode and not resuming_full:
+        save_full_checkpoint(page, all_bills)
 
     while True:
         print(f"Getting page {page}...")
@@ -371,9 +413,21 @@ def main():
         bills = data.get("results", [])
         print(f"  Found {len(bills)} bills.")
         all_bills.extend(bills)
+        pages_this_run += 1
+
+        if full_mode:
+            save_full_checkpoint(page + 1, all_bills)
 
         if len(bills) < PAGE_SIZE:
             break
+
+        if full_mode and pages_this_run >= MAX_FULL_PAGES_PER_RUN:
+            print(
+                f"Full reconciliation paused after {pages_this_run} pages. "
+                "Progress is saved and the next scheduled run will resume automatically."
+            )
+            return
+
         page += 1
 
     print(f"Total bills retrieved: {len(all_bills)}")
