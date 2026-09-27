@@ -10,6 +10,7 @@ on:
 
 permissions:
   contents: write
+  pull-requests: write
 
 concurrency:
   group: justice-reform-monitor
@@ -22,6 +23,15 @@ jobs:
     steps:
       - name: Download project
         uses: actions/checkout@v5
+
+      - name: Restore monitor state
+        run: |
+          git fetch origin monitor-updates:monitor-updates || true
+          if git show monitor-updates:.monitor_checkpoint.json > .monitor_checkpoint.json 2>/dev/null; then
+            echo "Restored monitor checkpoint from monitor-updates."
+          else
+            echo "No saved monitor checkpoint found; starting from the current repository state."
+          fi
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -43,12 +53,39 @@ jobs:
           OPENSTATES_API_KEY: ${{ secrets.OPENSTATES_API_KEY }}
         run: |
           python bill_search.py
-          
+
       - name: Save results and checkpoints
         if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git fetch origin main
+          git fetch origin monitor-updates:monitor-updates || true
+
+          mkdir -p /tmp/monitor-output
+          for file in bill_database.csv justice_reform_bills.csv justice_reform_report.txt .monitor_checkpoint.json; do
+            if [ -f "$file" ]; then
+              cp "$file" "/tmp/monitor-output/$file"
+            fi
+          done
+
+          if git show-ref --verify --quiet refs/remotes/origin/monitor-updates; then
+            git checkout -B monitor-updates origin/monitor-updates
+          else
+            git checkout -B monitor-updates origin/main
+          fi
+
+          for file in bill_database.csv justice_reform_bills.csv justice_reform_report.txt .monitor_checkpoint.json; do
+            if [ -f "/tmp/monitor-output/$file" ]; then
+              cp "/tmp/monitor-output/$file" "$file"
+            fi
+          done
+
           git add bill_database.csv justice_reform_bills.csv justice_reform_report.txt .monitor_checkpoint.json
           git commit -m "Update legislative monitoring results" || echo "No changes to commit"
-          git push
+          git push --force-with-lease origin monitor-updates
+
+          gh pr create             --base main             --head monitor-updates             --title "Automated legislative monitoring update"             --body "Automated Justice Reform Monitor results and checkpoint update. This PR is created because the main branch requires changes to go through a pull request."             || echo "Monitoring update PR already exists."
