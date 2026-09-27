@@ -65,16 +65,24 @@ jobs:
           git fetch origin main
           git fetch origin monitor-updates:monitor-updates || true
 
+          mkdir -p /tmp/monitor-output
+          for file in bill_database.csv justice_reform_bills.csv justice_reform_report.txt .monitor_checkpoint.json; do
+            if [ -f "$file" ]; then
+              cp "$file" "/tmp/monitor-output/$file"
+            fi
+          done
+
           if git show-ref --verify --quiet refs/remotes/origin/monitor-updates; then
             git checkout -B monitor-updates origin/monitor-updates
           else
             git checkout -B monitor-updates origin/main
           fi
 
-          git checkout ${{ github.sha }} -- bill_database.csv justice_reform_bills.csv justice_reform_report.txt 2>/dev/null || true
-          if [ -f "${{ github.workspace }}/.monitor_checkpoint.json" ]; then
-            cp "${{ github.workspace }}/.monitor_checkpoint.json" .monitor_checkpoint.json
-          fi
+          for file in bill_database.csv justice_reform_bills.csv justice_reform_report.txt .monitor_checkpoint.json; do
+            if [ -f "/tmp/monitor-output/$file" ]; then
+              cp "/tmp/monitor-output/$file" "$file"
+            fi
+          done
 
           git add bill_database.csv justice_reform_bills.csv justice_reform_report.txt .monitor_checkpoint.json
           git commit -m "Update legislative monitoring results" || echo "No changes to commit"
