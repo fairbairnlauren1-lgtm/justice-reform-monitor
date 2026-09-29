@@ -73,9 +73,9 @@ jobs:
           done
 
           if git show-ref --verify --quiet refs/remotes/origin/monitor-updates; then
-            git checkout -B monitor-updates origin/monitor-updates
+            git checkout -B monitor-updates origin/monitor-updates --force
           else
-            git checkout -B monitor-updates origin/main
+            git checkout -B monitor-updates origin/main --force
           fi
 
           for file in bill_database.csv justice_reform_bills.csv justice_reform_report.txt .monitor_checkpoint.json; do
