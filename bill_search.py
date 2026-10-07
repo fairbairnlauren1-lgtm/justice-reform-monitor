@@ -318,8 +318,12 @@ def main():
         print("Resuming full California reconciliation from the saved page checkpoint...")
         search_params = checkpoint_data.get("search_params") or {"jurisdiction": "California", "per_page": PAGE_SIZE}
         page = int(checkpoint_data.get("next_page", 1))
-        all_bills = checkpoint_data.get("bills", [])
-        print(f"Resuming at page {page}; {len(all_bills)} bills already saved in the baseline checkpoint.")
+        # New checkpoints store only matching bill records plus all discovered IDs.
+        # Fall back to the legacy "bills" field once so an existing large checkpoint
+        # can be migrated safely on its next save.
+        all_bills = checkpoint_data.get("matched_bills", checkpoint_data.get("bills", []))
+        saved_ids = checkpoint_data.get("bill_ids", [])
+        print(f"Resuming at page {page}; {len(saved_ids) or len(all_bills)} bill IDs already saved in the baseline checkpoint.")
         full_mode = True
     elif args.full or not old_bills or not checkpoint:
         print("Performing full California bill reconciliation...")
@@ -344,11 +348,26 @@ def main():
     pages_this_run = 0
 
     def save_full_checkpoint(next_page, bills):
+        # Keep the checkpoint small enough to inspect and safely resume.
+        # All discovered IDs are preserved, while only bills relevant to the
+        # monitor are retained as records for the final reconciliation.
+        bill_ids = []
+        seen_ids = set()
+        matched_bills = []
+        for bill in bills:
+            identifier = bill.get("identifier", "")
+            if identifier and identifier not in seen_ids:
+                seen_ids.add(identifier)
+                bill_ids.append(identifier)
+            if find_matches(bill):
+                matched_bills.append(bill)
+
         payload = {
             "mode": "full_in_progress",
             "next_page": next_page,
             "search_params": search_params,
-            "bills": bills,
+            "bill_ids": bill_ids,
+            "matched_bills": matched_bills,
         }
         temp = CHECKPOINT_FILE.with_name(CHECKPOINT_FILE.name + ".tmp")
         try:
