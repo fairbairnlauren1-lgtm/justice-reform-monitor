@@ -29,7 +29,7 @@ MAX_RETRIES = 5
 REQUEST_INTERVAL_SECONDS = 7
 RATE_LIMIT_RETRY_SECONDS = 65
 PAGE_SIZE = 20
-MAX_FULL_PAGES_PER_RUN = 30
+MAX_FULL_PAGES_PER_RUN = 50
 
 # ============================================================
 # KEYWORDS
@@ -267,6 +267,19 @@ def find_matches(bill):
     return matches
 
 
+def get_pagination_totals(data):
+    """Read Open States' pagination totals when the API provides them."""
+    pagination = data.get("pagination") or {}
+    totals = []
+    for key in ("max_page", "total_items"):
+        value = pagination.get(key)
+        try:
+            totals.append(int(value) if value is not None else None)
+        except (TypeError, ValueError):
+            totals.append(None)
+    return tuple(totals)
+
+
 def main():
     parser = argparse.ArgumentParser(description="California justice reform legislative monitor")
     parser.add_argument("--full", action="store_true", help="Perform a full reconciliation")
@@ -346,19 +359,17 @@ def main():
     headers = {"X-API-KEY": api_key.strip()}
     last_request_at = 0.0
     pages_this_run = 0
+    discovered_ids = list(dict.fromkeys(checkpoint_data.get("bill_ids", []))) if resuming_full else []
+    discovered_id_set = set(discovered_ids)
+    total_pages = checkpoint_data.get("total_pages") if resuming_full else None
+    total_items = checkpoint_data.get("total_items") if resuming_full else None
 
     def save_full_checkpoint(next_page, bills):
         # Keep the checkpoint small enough to inspect and safely resume.
         # All discovered IDs are preserved, while only bills relevant to the
         # monitor are retained as records for the final reconciliation.
-        bill_ids = []
-        seen_ids = set()
         matched_bills = []
         for bill in bills:
-            identifier = bill.get("identifier", "")
-            if identifier and identifier not in seen_ids:
-                seen_ids.add(identifier)
-                bill_ids.append(identifier)
             if find_matches(bill):
                 matched_bills.append(bill)
 
@@ -366,9 +377,13 @@ def main():
             "mode": "full_in_progress",
             "next_page": next_page,
             "search_params": search_params,
-            "bill_ids": bill_ids,
+            "bill_ids": discovered_ids,
             "matched_bills": matched_bills,
         }
+        if total_pages is not None:
+            payload["total_pages"] = total_pages
+        if total_items is not None:
+            payload["total_items"] = total_items
         temp = CHECKPOINT_FILE.with_name(CHECKPOINT_FILE.name + ".tmp")
         try:
             temp.write_text(json.dumps(payload), encoding="utf-8")
@@ -429,15 +444,30 @@ def main():
             raise RuntimeError(f"Could not retrieve page {page} after {MAX_RETRIES} attempts: {last_error}")
 
         data = response.json()
+        response_total_pages, response_total_items = get_pagination_totals(data)
+        if response_total_pages is not None:
+            total_pages = response_total_pages
+        if response_total_items is not None:
+            total_items = response_total_items
+        if total_pages is not None:
+            remaining_including_this_page = max(0, total_pages - page + 1)
+            print(f"  API reports {total_items if total_items is not None else 'an unknown number of'} total bills across {total_pages} pages; {remaining_including_this_page} pages remain including this one.")
+
         bills = data.get("results", [])
         print(f"  Found {len(bills)} bills.")
+        if full_mode:
+            for bill in bills:
+                identifier = bill.get("identifier", "")
+                if identifier and identifier not in discovered_id_set:
+                    discovered_id_set.add(identifier)
+                    discovered_ids.append(identifier)
         all_bills.extend(bills)
         pages_this_run += 1
 
         if full_mode:
             save_full_checkpoint(page + 1, all_bills)
 
-        if len(bills) < PAGE_SIZE:
+        if len(bills) < PAGE_SIZE or (total_pages is not None and page >= total_pages):
             break
 
         if full_mode and pages_this_run >= MAX_FULL_PAGES_PER_RUN:
