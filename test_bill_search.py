@@ -92,3 +92,13 @@ def test_find_matches_handles_hyphenation_consistently():
     assert "Sentencing reform" in matches
     assert "three strikes" in matches["Sentencing reform"]
     assert "resentencing" in matches["Sentencing reform"]
+
+
+
+def test_get_pagination_totals_reads_openstates_metadata():
+    data = {"pagination": {"max_page": 734, "total_items": 14671}}
+    assert bill_search.get_pagination_totals(data) == (734, 14671)
+
+
+def test_get_pagination_totals_handles_missing_metadata():
+    assert bill_search.get_pagination_totals({"results": []}) == (None, None)
