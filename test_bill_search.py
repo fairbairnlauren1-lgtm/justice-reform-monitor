@@ -102,3 +102,22 @@ def test_get_pagination_totals_reads_openstates_metadata():
 
 def test_get_pagination_totals_handles_missing_metadata():
     assert bill_search.get_pagination_totals({"results": []}) == (None, None)
+
+def test_is_active_bill_excludes_chaptered_bill():
+    bill = {"latest_action_description": "Chaptered by Secretary of State. Chapter 12, Statutes of 2025."}
+    assert bill_search.is_active_bill(bill) is False
+
+
+def test_is_active_bill_excludes_failed_bill():
+    bill = {"latest_action_description": "Failed passage in Senate."}
+    assert bill_search.is_active_bill(bill) is False
+
+
+def test_is_active_bill_keeps_bill_under_consideration():
+    bill = {"latest_action_description": "Referred to Assembly Committee on Public Safety."}
+    assert bill_search.is_active_bill(bill) is True
+
+
+def test_is_active_bill_keeps_bill_without_latest_action():
+    assert bill_search.is_active_bill({"title": "Bail Reform Act"}) is True
+
