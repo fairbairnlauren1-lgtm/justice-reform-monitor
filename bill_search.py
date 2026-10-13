@@ -30,6 +30,15 @@ REQUEST_INTERVAL_SECONDS = 7
 RATE_LIMIT_RETRY_SECONDS = 65
 PAGE_SIZE = 20
 MAX_FULL_PAGES_PER_RUN = 50
+CURRENT_SESSION = os.getenv("OPENSTATES_SESSION", "2025-2026")
+
+TERMINAL_ACTION_PHRASES = (
+    "chaptered", "approved by governor", "signed by governor",
+    "vetoed by governor", "became law", "failed passage", "failed in",
+    "died in", "died on", "withdrawn", "defeated", "inactive file",
+    "passed both houses", "enrolled and presented to governor",
+    "enrolled and sent to governor",
+)
 
 # ============================================================
 # KEYWORDS
@@ -267,6 +276,16 @@ def find_matches(bill):
     return matches
 
 
+def is_active_bill(bill):
+    """Return False when the latest action clearly shows the bill is finished."""
+    action = normalize_text(
+        bill.get("latest_action_description") or bill.get("latest_action") or ""
+    )
+    if not action:
+        return True
+    return not any(phrase in action for phrase in TERMINAL_ACTION_PHRASES)
+
+
 def get_pagination_totals(data):
     """Read Open States' pagination totals when the API provides them."""
     pagination = data.get("pagination") or {}
@@ -321,37 +340,52 @@ def main():
             checkpoint_data = {}
 
     checkpoint = checkpoint_data.get("last_successful_search")
-    resuming_full = (
+    resuming_session = (
         not args.full
-        and checkpoint_data.get("mode") == "full_in_progress"
+        and checkpoint_data.get("mode") == "session_in_progress"
         and checkpoint_data.get("next_page")
     )
+    current_session_mode = not args.full
+    session_baseline_mode = False
 
-    if resuming_full:
-        print("Resuming full California reconciliation from the saved page checkpoint...")
-        search_params = checkpoint_data.get("search_params") or {"jurisdiction": "California", "per_page": PAGE_SIZE}
+    if resuming_session:
+        print(f"Resuming current-session reconciliation from page {checkpoint_data.get('next_page')}...")
+        search_params = checkpoint_data.get("search_params") or {
+            "jurisdiction": "California", "session": CURRENT_SESSION, "per_page": PAGE_SIZE
+        }
         page = int(checkpoint_data.get("next_page", 1))
-        # New checkpoints store only matching bill records plus all discovered IDs.
-        # Fall back to the legacy "bills" field once so an existing large checkpoint
-        # can be migrated safely on its next save.
-        all_bills = checkpoint_data.get("matched_bills", checkpoint_data.get("bills", []))
+        all_bills = checkpoint_data.get("matched_bills", [])
         saved_ids = checkpoint_data.get("bill_ids", [])
-        print(f"Resuming at page {page}; {len(saved_ids) or len(all_bills)} bill IDs already saved in the baseline checkpoint.")
+        print(f"Resuming at page {page}; {len(saved_ids) or len(all_bills)} bill IDs already saved.")
         full_mode = True
-    elif args.full or not old_bills or not checkpoint:
-        print("Performing full California bill reconciliation...")
+        session_baseline_mode = True
+    elif args.full:
+        print("Performing explicit full historical reconciliation...")
         search_params = {"jurisdiction": "California", "per_page": PAGE_SIZE}
         page = 1
         all_bills = []
         full_mode = True
+        current_session_mode = False
+    elif checkpoint_data.get("mode") == "full_in_progress" or not old_bills or not checkpoint:
+        print(f"Starting current-session reconciliation for California session {CURRENT_SESSION}...")
+        search_params = {
+            "jurisdiction": "California", "session": CURRENT_SESSION, "per_page": PAGE_SIZE
+        }
+        page = 1
+        all_bills = []
+        full_mode = True
+        session_baseline_mode = True
     else:
         try:
             since = datetime.fromisoformat(checkpoint).astimezone(timezone.utc) - timedelta(hours=OVERLAP_HOURS)
         except ValueError:
             raise SystemExit("ERROR: checkpoint timestamp is invalid; run with --full to rebuild safely.")
         since_text = since.strftime("%Y-%m-%dT%H:%M:%S")
-        print(f"Looking for bills updated since {since_text} UTC (with {OVERLAP_HOURS}-hour overlap)...")
-        search_params = {"jurisdiction": "California", "per_page": PAGE_SIZE, "updated_since": since_text}
+        print(f"Checking current-session bills updated since {since_text} UTC (with {OVERLAP_HOURS}-hour overlap)...")
+        search_params = {
+            "jurisdiction": "California", "session": CURRENT_SESSION,
+            "per_page": PAGE_SIZE, "updated_since": since_text
+        }
         page = 1
         all_bills = []
         full_mode = False
@@ -359,10 +393,10 @@ def main():
     headers = {"X-API-KEY": api_key.strip()}
     last_request_at = 0.0
     pages_this_run = 0
-    discovered_ids = list(dict.fromkeys(checkpoint_data.get("bill_ids", []))) if resuming_full else []
+    discovered_ids = list(dict.fromkeys(checkpoint_data.get("bill_ids", []))) if resuming_session else []
     discovered_id_set = set(discovered_ids)
-    total_pages = checkpoint_data.get("total_pages") if resuming_full else None
-    total_items = checkpoint_data.get("total_items") if resuming_full else None
+    total_pages = checkpoint_data.get("total_pages") if resuming_session else None
+    total_items = checkpoint_data.get("total_items") if resuming_session else None
 
     def save_full_checkpoint(next_page, bills):
         # Keep the checkpoint small enough to inspect and safely resume.
@@ -374,7 +408,7 @@ def main():
                 matched_bills.append(bill)
 
         payload = {
-            "mode": "full_in_progress",
+            "mode": "session_in_progress" if current_session_mode else "full_in_progress",
             "next_page": next_page,
             "search_params": search_params,
             "bill_ids": discovered_ids,
@@ -395,7 +429,7 @@ def main():
                 pass
             raise
 
-    if full_mode and not resuming_full:
+    if full_mode and not resuming_session:
         save_full_checkpoint(page, all_bills)
 
     while True:
@@ -498,7 +532,7 @@ def main():
 
         matches = find_matches(bill)
 
-        if not matches:
+        if not matches or (current_session_mode and not is_active_bill(bill)):
             continue
 
         print()
@@ -616,7 +650,7 @@ def main():
         "matched_categories", "matched_keywords", "last_checked",
     ]
 
-    if args.full or not old_bills:
+    if args.full or session_baseline_mode or not old_bills:
         database_records = {r["identifier"]: r for r in current_bills if r.get("identifier")}
     else:
         database_records = dict(old_bills)
@@ -662,7 +696,11 @@ def main():
             file.write("CALIFORNIA JUSTICE REFORM MONITOR\n")
             file.write(f"Search date: {today}\n\n")
             file.write("SEARCH STATUS\n=============\n\n")
-            file.write("SUCCESS: all requested API pages were retrieved.\n\n")
+            file.write("SUCCESS: all requested API pages were retrieved.\n")
+            if current_session_mode:
+                file.write(f"Scope: California {CURRENT_SESSION} session; bills with clearly terminal latest actions are excluded.\n\n")
+            else:
+                file.write("Scope: full historical California bill scan.\n\n")
             file.write("NEW BILLS\n=========\n\n")
             if not new_bills:
                 file.write("No new bills found.\n\n")
@@ -691,7 +729,7 @@ def main():
 
     checkpoint_payload = {
         "last_successful_search": datetime.now(timezone.utc).isoformat(),
-        "mode": "full" if args.full or not old_bills else "incremental",
+        "mode": "full" if args.full else ("session" if current_session_mode else "incremental"),
         "bills_retrieved": len(all_bills),
     }
     atomic_write(CHECKPOINT_FILE, lambda temp: temp.write_text(json.dumps(checkpoint_payload, indent=2) + "\n", encoding="utf-8"))
