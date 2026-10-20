@@ -1,5 +1,5 @@
 CALIFORNIA JUSTICE REFORM MONITOR
-Search date: 2026-10-19
+Search date: 2026-10-20
 
 SEARCH STATUS
 =============
@@ -31,23 +31,9 @@ Latest action: In committee: Held under submission.
 Date: 2026-08-13
 URL: https://openstates.org/ca/bills/20252026/AB2553/
 
-AB 2223 - Department of Corrections and Rehabilitation: state contracts.
-Category: Prisons and incarceration
-Keywords: corrections
-Latest action: In committee: Held under submission.
-Date: 2026-08-13
-URL: https://openstates.org/ca/bills/20252026/AB2223/
-
-AB 1662 - Misdemeanor diversion.
-Category: Alternatives to incarceration
-Keywords: diversion
-Latest action: In committee: Held under submission.
-Date: 2026-08-13
-URL: https://openstates.org/ca/bills/20252026/AB1662/
-
 CHANGED BILLS
 =============
 
 No changed bills found.
 
-Relevant bills currently tracked: 6
+Relevant bills currently tracked: 4
