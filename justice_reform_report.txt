@@ -1,5 +1,5 @@
 CALIFORNIA JUSTICE REFORM MONITOR
-Search date: 2026-10-20
+Search date: 2026-10-21
 
 SEARCH STATUS
 =============
@@ -10,30 +10,11 @@ Scope: California 20252026 session; bills with clearly terminal latest actions a
 NEW BILLS
 =========
 
-AB 2108 - Diversion: retail theft.
-Category: Alternatives to incarceration
-Keywords: diversion
-Latest action: In committee: Held under submission.
-Date: 2026-08-13
-URL: https://openstates.org/ca/bills/20252026/AB2108/
-
-AB 2026 - Water diversion: groundwater recharge: permit.
-Category: Alternatives to incarceration
-Keywords: diversion
-Latest action: In committee: Held under submission.
-Date: 2026-08-13
-URL: https://openstates.org/ca/bills/20252026/AB2026/
-
-AB 2553 - Real estate crimes: probation.
-Category: Reentry and supervision
-Keywords: probation
-Latest action: In committee: Held under submission.
-Date: 2026-08-13
-URL: https://openstates.org/ca/bills/20252026/AB2553/
+No new bills found.
 
 CHANGED BILLS
 =============
 
 No changed bills found.
 
-Relevant bills currently tracked: 4
+Relevant bills currently tracked: 2
