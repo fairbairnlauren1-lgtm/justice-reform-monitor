@@ -1,5 +1,11 @@
 CALIFORNIA JUSTICE REFORM MONITOR
-Search date: 2026-09-20
+Search date: 2026-10-24
+
+SEARCH STATUS
+=============
+
+SUCCESS: all requested API pages were retrieved.
+Scope: California 20252026 session; bills with clearly terminal latest actions are excluded.
 
 NEW BILLS
 =========
@@ -11,3 +17,4 @@ CHANGED BILLS
 
 No changed bills found.
 
+Relevant bills currently tracked: 2
