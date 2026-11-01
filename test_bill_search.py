@@ -124,24 +124,37 @@ def test_is_active_bill_keeps_bill_without_latest_action():
 
 
 
+
 def test_legacy_session_checkpoint_restarts_current_session_baseline():
-    # Older successful checkpoints used mode="session" and did not save
-    # resumable page/bill-ID data. They must trigger a fresh session baseline,
-    # not an incremental updated_since search against an incomplete CSV.
+    # Older checkpoints used mode="session" but did not save resumable page
+    # data, so incremental updated_since searches are unsafe.
     checkpoint_data = {
         "mode": "session",
         "last_successful_search": "2026-11-01T14:45:40+00:00",
         "bills_retrieved": 103,
     }
 
-    assert checkpoint_data.get("mode") in ("full_in_progress", "session")
+    assert bill_search.should_start_session_baseline(
+        checkpoint_data, {"AB 2195": {}}, checkpoint_data["last_successful_search"]
+    ) is True
 
 
-def test_resumable_session_checkpoint_is_not_treated_as_legacy():
+def test_completed_session_checkpoint_uses_incremental_search():
     checkpoint_data = {
-        "mode": "session_in_progress",
-        "next_page": 51,
-        "bill_ids": ["AB 1013"],
+        "mode": "session",
+        "last_successful_search": "2026-11-01T14:45:40+00:00",
     }
 
-    assert checkpoint_data.get("mode") != "session"
+    # A completed checkpoint is normally rewritten to mode="incremental".
+    checkpoint_data["mode"] = "incremental"
+    assert bill_search.should_start_session_baseline(
+        checkpoint_data, {"AB 2195": {}}, checkpoint_data["last_successful_search"]
+    ) is False
+
+
+def test_session_in_progress_checkpoint_is_handled_by_resume_branch():
+    checkpoint_data = {"mode": "session_in_progress", "next_page": 51}
+
+    assert bill_search.should_start_session_baseline(
+        checkpoint_data, {"AB 2195": {}}, "2026-11-01T14:45:40+00:00"
+    ) is False
