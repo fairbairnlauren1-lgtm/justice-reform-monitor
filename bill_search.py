@@ -366,7 +366,7 @@ def main():
         all_bills = []
         full_mode = True
         current_session_mode = False
-    elif checkpoint_data.get("mode") == "full_in_progress" or not old_bills or not checkpoint:
+    elif checkpoint_data.get("mode") in ("full_in_progress", "session") or not old_bills or not checkpoint:
         print(f"Starting current-session reconciliation for California session {CURRENT_SESSION}...")
         search_params = {
             "jurisdiction": "California", "session": CURRENT_SESSION, "per_page": PAGE_SIZE
