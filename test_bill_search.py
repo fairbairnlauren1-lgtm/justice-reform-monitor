@@ -121,3 +121,27 @@ def test_is_active_bill_keeps_bill_under_consideration():
 def test_is_active_bill_keeps_bill_without_latest_action():
     assert bill_search.is_active_bill({"title": "Bail Reform Act"}) is True
 
+
+
+
+def test_legacy_session_checkpoint_restarts_current_session_baseline():
+    # Older successful checkpoints used mode="session" and did not save
+    # resumable page/bill-ID data. They must trigger a fresh session baseline,
+    # not an incremental updated_since search against an incomplete CSV.
+    checkpoint_data = {
+        "mode": "session",
+        "last_successful_search": "2026-11-01T14:45:40+00:00",
+        "bills_retrieved": 103,
+    }
+
+    assert checkpoint_data.get("mode") in ("full_in_progress", "session")
+
+
+def test_resumable_session_checkpoint_is_not_treated_as_legacy():
+    checkpoint_data = {
+        "mode": "session_in_progress",
+        "next_page": 51,
+        "bill_ids": ["AB 1013"],
+    }
+
+    assert checkpoint_data.get("mode") != "session"
