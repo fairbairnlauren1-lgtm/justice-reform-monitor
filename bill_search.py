@@ -286,6 +286,15 @@ def is_active_bill(bill):
     return not any(phrase in action for phrase in TERMINAL_ACTION_PHRASES)
 
 
+def should_start_session_baseline(checkpoint_data, old_bills, checkpoint):
+    """Detect checkpoints that cannot safely support incremental updates."""
+    return (
+        checkpoint_data.get("mode") in ("full_in_progress", "session")
+        or not old_bills
+        or not checkpoint
+    )
+
+
 def get_pagination_totals(data):
     """Read Open States' pagination totals when the API provides them."""
     pagination = data.get("pagination") or {}
@@ -366,7 +375,7 @@ def main():
         all_bills = []
         full_mode = True
         current_session_mode = False
-    elif checkpoint_data.get("mode") == "full_in_progress" or not old_bills or not checkpoint:
+    elif should_start_session_baseline(checkpoint_data, old_bills, checkpoint):
         print(f"Starting current-session reconciliation for California session {CURRENT_SESSION}...")
         search_params = {
             "jurisdiction": "California", "session": CURRENT_SESSION, "per_page": PAGE_SIZE

@@ -121,3 +121,40 @@ def test_is_active_bill_keeps_bill_under_consideration():
 def test_is_active_bill_keeps_bill_without_latest_action():
     assert bill_search.is_active_bill({"title": "Bail Reform Act"}) is True
 
+
+
+
+
+def test_legacy_session_checkpoint_restarts_current_session_baseline():
+    # Older checkpoints used mode="session" but did not save resumable page
+    # data, so incremental updated_since searches are unsafe.
+    checkpoint_data = {
+        "mode": "session",
+        "last_successful_search": "2026-11-01T14:45:40+00:00",
+        "bills_retrieved": 103,
+    }
+
+    assert bill_search.should_start_session_baseline(
+        checkpoint_data, {"AB 2195": {}}, checkpoint_data["last_successful_search"]
+    ) is True
+
+
+def test_completed_session_checkpoint_uses_incremental_search():
+    checkpoint_data = {
+        "mode": "session",
+        "last_successful_search": "2026-11-01T14:45:40+00:00",
+    }
+
+    # A completed checkpoint is normally rewritten to mode="incremental".
+    checkpoint_data["mode"] = "incremental"
+    assert bill_search.should_start_session_baseline(
+        checkpoint_data, {"AB 2195": {}}, checkpoint_data["last_successful_search"]
+    ) is False
+
+
+def test_session_in_progress_checkpoint_is_handled_by_resume_branch():
+    checkpoint_data = {"mode": "session_in_progress", "next_page": 51}
+
+    assert bill_search.should_start_session_baseline(
+        checkpoint_data, {"AB 2195": {}}, "2026-11-01T14:45:40+00:00"
+    ) is False
